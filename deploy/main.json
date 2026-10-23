@@ -1,0 +1,168 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.48.1.52935",
+      "templateHash": "6884029653811713914"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "automationAccountName": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 50
+    },
+    "alertEmail": {
+      "type": "string"
+    },
+    "enableFailureAlert": {
+      "type": "bool",
+      "defaultValue": true
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Automation/automationAccounts",
+      "apiVersion": "2024-10-23",
+      "name": "[parameters('automationAccountName')]",
+      "location": "[parameters('location')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "sku": {
+          "name": "Basic"
+        },
+        "publicNetworkAccess": true
+      }
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runtimeEnvironments",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', parameters('automationAccountName'), 'PowerShell74')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runtime": {
+          "language": "PowerShell",
+          "version": "7.4"
+        },
+        "defaultPackages": {
+          "Az": "12.3.0"
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Automation/automationAccounts/runbooks",
+      "apiVersion": "2024-10-23",
+      "name": "[format('{0}/{1}', parameters('automationAccountName'), 'Send-CredentialDigest')]",
+      "location": "[parameters('location')]",
+      "properties": {
+        "runbookType": "PowerShell",
+        "runtimeEnvironment": "PowerShell74",
+        "logProgress": false,
+        "logVerbose": false,
+        "description": "Weekly stateless credential expiry digest to application owners."
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Automation/automationAccounts/runtimeEnvironments', parameters('automationAccountName'), 'PowerShell74')]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableFailureAlert')]",
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-alerts', parameters('automationAccountName'))]",
+      "location": "global",
+      "properties": {
+        "groupShortName": "CredDigest",
+        "enabled": true,
+        "emailReceivers": [
+          {
+            "name": "Operations",
+            "emailAddress": "[parameters('alertEmail')]",
+            "useCommonAlertSchema": true
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[parameters('enableFailureAlert')]",
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-job-failure', parameters('automationAccountName'))]",
+      "location": "global",
+      "properties": {
+        "description": "Credential digest failed, stopped, or suspended.",
+        "severity": 2,
+        "enabled": true,
+        "scopes": [
+          "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "autoMitigate": true,
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "FailedJob",
+              "criterionType": "StaticThresholdCriterion",
+              "metricNamespace": "Microsoft.Automation/automationAccounts",
+              "metricName": "TotalJob",
+              "timeAggregation": "Total",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "dimensions": [
+                {
+                  "name": "Runbook",
+                  "operator": "Include",
+                  "values": [
+                    "Send-CredentialDigest"
+                  ]
+                },
+                {
+                  "name": "Status",
+                  "operator": "Include",
+                  "values": [
+                    "Failed",
+                    "Stopped",
+                    "Suspended"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        "actions": [
+          {
+            "actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', format('{0}-alerts', parameters('automationAccountName')))]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]",
+        "[resourceId('Microsoft.Insights/actionGroups', format('{0}-alerts', parameters('automationAccountName')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "principalId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName')), '2024-10-23', 'full').identity.principalId]"
+    },
+    "automationAccountId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Automation/automationAccounts', parameters('automationAccountName'))]"
+    }
+  }
+}

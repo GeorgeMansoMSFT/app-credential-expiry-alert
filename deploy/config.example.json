@@ -1,0 +1,19 @@
+{
+  "tenantId": "YOUR-TENANT-GUID",
+  "subscriptionId": "YOUR-SUBSCRIPTION-GUID",
+  "resourceGroup": "rg-app-credential-digest",
+  "location": "centralus",
+  "automationAccountName": "aa-app-credential-digest",
+  "exchangeAdminUpn": "admin@contoso.com",
+  "senderMailbox": "app-notifications@contoso.com",
+  "createSharedMailbox": false,
+  "sharedMailboxName": "App Credential Notifications",
+  "fallbackRecipient": "identity-operations@contoso.com",
+  "testRecipient": "builder@contoso.com",
+  "warningDays": 60,
+  "urgentDays": 30,
+  "enableFailureAlert": true,
+  "scheduleTimeZone": "America/New_York",
+  "scheduleDay": "Monday",
+  "scheduleHour": 9
+}
