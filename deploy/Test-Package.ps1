@@ -41,7 +41,7 @@ try {
     Assert ($global:digestMailboxCreated -eq 1) 'Create mode must create once and reuse on repeat.'
     $global:digestMailboxAddress='different@contoso.com'
     $caught=$false; try { Resolve-DigestSender $valid | Out-Null } catch { $caught=$true }
-    Assert $caught 'Mailbox alias mismatch must not silently mis-scope send permissions.'
+    Assert $caught 'Primary SMTP mismatch must not silently mis-scope send permissions.'
     $global:digestScopeCreated=0
     $global:digestScopes=@([pscustomobject]@{Name='ExistingScope';RecipientFilter="PrimarySmtpAddress -eq '$($valid.senderMailbox)'";RecipientRoot=$null;ServerFilter='';Exclusive=$false;ScopeRestrictionType='RecipientScope'})
     function Get-ManagementScope { $global:digestScopes }
@@ -59,6 +59,12 @@ try {
     Resolve-DigestSendScope $valid | Out-Null
     Assert ($global:digestScopeCreated -eq 1) 'New sender must create one scope and reuse it.'
     Assert ($global:digestScopes[0].Name -eq 'ExistingScope') 'Existing deployment scope was altered.'
+    foreach ($case in @(@{Value='True';Expected=$true},@{Value='False';Expected=$false},@{Value=$true;Expected=$true},@{Value=$false;Expected=$false})) {
+        $result=Test-DigestMailSendInScope @([pscustomobject]@{RoleName='Application Mail.Send';InScope=$case.Value})
+        Assert ($result -eq $case.Expected) "InScope value '$($case.Value)' ($($case.Value.GetType().Name)) was misread."
+    }
+    Assert (!(Test-DigestMailSendInScope @([pscustomobject]@{RoleName='Application Mail.ReadBasic';InScope='True'}))) 'A different role satisfied the Mail.Send check.'
+    Assert (!(Test-DigestMailSendInScope @())) 'No authorization rows satisfied the Mail.Send check.'
     function Invoke-AzureCli { param($Arguments) @{accessToken='offline-token'} }
     function Invoke-RestMethod {
         param($Uri,$Method,$Authentication,$Token,$ErrorAction,$ContentType,$Body)
@@ -72,7 +78,7 @@ try {
     }
     Invoke-DigestArm -Uri 'https://management.azure.com/offline-test' -Method PUT -Body ([Text.Encoding]::UTF8.GetBytes('#Requires -Version 7.4')) -ContentType 'text/powershell'
     Invoke-DigestArm -Uri 'https://management.azure.com/offline-test' -Method PUT -Body @{properties=@{enabled=$true}}
-    'PASS: configuration, mailbox options/reuse, sender scope reuse, binary runbook upload, and JSON request serialization.'
+    'PASS: configuration, mailbox options/reuse, sender scope reuse, Mail.Send scope check, binary runbook upload, and JSON request serialization.'
 } finally {
     Remove-Item -LiteralPath $path -Force
     Remove-Variable digestMailboxExists,digestMailboxCreated,digestMailboxAddress,digestScopeCreated,digestScopes -Scope Global -ErrorAction SilentlyContinue

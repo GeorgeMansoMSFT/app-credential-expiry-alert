@@ -1,13 +1,3 @@
 config.json
 .local-*.json
 dist/
-dev-job-id.txt
-validation-package/
-Dev-Test-Record.md
-Deploy-Dev.ps1
-Configure-DevMail.ps1
-Configure-DevMonitoring.ps1
-Enable-WeeklyDigest.ps1
-Start-DevTest.ps1
-Get-DevTestResult.ps1
-dev-digest-preview.html

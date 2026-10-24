@@ -33,20 +33,27 @@ function Invoke-Graph {
     # Only retry reads: retrying an ambiguous sendMail response can duplicate mail.
     for ($attempt = 0; $attempt -lt 5; $attempt++) {
         try {
-            $args = @{ Uri=$Uri; Method=$Method; ErrorAction='Stop' }
-            if ($null -ne $Body) { $args.Body = $Body | ConvertTo-Json -Depth 12 -Compress; $args.ContentType = 'application/json' }
+            $request = @{ Uri=$Uri; Method=$Method; ErrorAction='Stop' }
+            if ($null -ne $Body) { $request.Body = $Body | ConvertTo-Json -Depth 12 -Compress; $request.ContentType = 'application/json' }
             if ($Authentication -eq 'ExistingGraphSession') {
-                return Invoke-MgGraphRequest @args -OutputType PSObject
+                return Invoke-MgGraphRequest @request -OutputType PSObject
             }
             $token = Get-AzAccessToken -ResourceUrl 'https://graph.microsoft.com/'
-            $args.Authentication = 'Bearer'
-            $args.Token = if ($token.Token -is [securestring]) { $token.Token } else { ConvertTo-SecureString $token.Token -AsPlainText -Force }
-            return Invoke-RestMethod @args
+            $request.Authentication = 'Bearer'
+            $request.Token = if ($token.Token -is [securestring]) { $token.Token } else { ConvertTo-SecureString $token.Token -AsPlainText -Force }
+            return Invoke-RestMethod @request
         } catch {
-            $status = [int]$_.Exception.Response.StatusCode
-            if ($Method -ne 'GET' -or $status -notin @(429,500,502,503,504) -or $attempt -eq 4) { throw }
+            $response = $_.Exception.PSObject.Properties['Response']
+            $status = if ($response -and $response.Value) { [int]$response.Value.StatusCode } else { 0 }
+            # A read that got no HTTP response (timeout, DNS failure, socket reset) is transient too.
+            $transport = $false
+            for ($inner = $_.Exception; $inner; $inner = $inner.InnerException) {
+                if ($inner -is [System.Net.Http.HttpRequestException] -or $inner -is [System.Threading.Tasks.TaskCanceledException] -or $inner -is [System.IO.IOException]) { $transport = $true }
+            }
+            $retryable = $status -in @(429,500,502,503,504) -or (!$status -and $transport)
+            if ($Method -ne 'GET' -or !$retryable -or $attempt -eq 4) { throw }
             $delay = [int][math]::Pow(2, $attempt + 1)
-            $retryAfter = $_.Exception.Response.Headers.RetryAfter
+            $retryAfter = if ($status) { $response.Value.Headers.RetryAfter }
             if ($retryAfter.Delta) { $delay = [math]::Max($delay, [int][math]::Ceiling($retryAfter.Delta.TotalSeconds)) }
             elseif ($retryAfter.Date) { $delay = [math]::Max($delay, [int][math]::Ceiling(($retryAfter.Date - [datetimeoffset]::UtcNow).TotalSeconds)) }
             Start-Sleep -Seconds $delay
@@ -64,18 +71,19 @@ function Get-GraphCollection([string]$Uri) {
 function Encode($Value) { [System.Net.WebUtility]::HtmlEncode([string]$Value) }
 
 $now = [datetimeoffset]::UtcNow
-$apps = @(Get-GraphCollection 'https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName,passwordCredentials,keyCredentials&$top=100')
+$apps = @(Get-GraphCollection 'https://graph.microsoft.com/v1.0/applications?$select=id,appId,displayName,passwordCredentials,keyCredentials&$top=999')
 if ($ApplicationIds.Count) { $apps = @($apps | Where-Object appId -In $ApplicationIds) }
 $digests = @{}
 $exceptions = [System.Collections.Generic.List[object]]::new()
-$ownerCache = @{}
 $credentialCount = 0
 foreach ($app in $apps) {
     $rows = @(
         foreach ($kind in @('passwordCredentials','keyCredentials')) {
             foreach ($credential in $app.$kind) {
                 if (!$credential.endDateTime) { continue }
-                $expiry = [datetimeoffset]::Parse($credential.endDateTime)
+                # Cast, not Parse(): JSON conversion already yields a UTC DateTime, and Parse() would
+                # round-trip it through a culture-formatted string with no offset (wrong zone, or a throw).
+                $expiry = [datetimeoffset]$credential.endDateTime
                 if ($expiry -gt $now.AddDays($WarningDays)) { continue }
                 [pscustomobject]@{
                     App=$app.displayName; AppId=$app.appId; ObjectId=$app.id
@@ -89,14 +97,11 @@ foreach ($app in $apps) {
     )
     if (!$rows.Count) { continue }
     $credentialCount += $rows.Count
-    $owners = @(Get-GraphCollection "https://graph.microsoft.com/v1.0/applications/$($app.id)/owners?`$select=id")
+    # The type cast returns user owners only; service principal owners cannot receive mail.
+    $owners = @(Get-GraphCollection "https://graph.microsoft.com/v1.0/applications/$($app.id)/owners/microsoft.graph.user?`$select=id,mail")
     $addresses = @(
         foreach ($owner in $owners) {
-            if ($owner.'@odata.type' -ne '#microsoft.graph.user') { continue }
-            if (!$ownerCache.ContainsKey($owner.id)) {
-                $ownerCache[$owner.id] = Invoke-Graph -Uri "https://graph.microsoft.com/v1.0/users/$($owner.id)?`$select=id,mail"
-            }
-            $mail = $ownerCache[$owner.id].mail
+            $mail = $owner.mail
             if (!$mail) { $exceptions.Add([pscustomobject]@{ App=$app.displayName; Issue="Owner $($owner.id) has no mail address" }) ; continue }
             try { $parsed = [System.Net.Mail.MailAddress]::new($mail) } catch { $parsed = $null }
             if (!$parsed -or $parsed.Address -ne $mail) { $exceptions.Add([pscustomobject]@{ App=$app.displayName; Issue="Owner $($owner.id) has an invalid mail address" }); continue }
@@ -123,7 +128,8 @@ foreach ($recipient in ($digests.Keys | Sort-Object)) {
         '<tr><td><a href="{0}">{1}</a><br>{2}</td><td>{3}<br>{4}<br>{5}</td><td>{6}</td><td>{7}</td><td>{8}</td></tr>' -f (Encode $link),(Encode $row.App),(Encode $row.AppId),(Encode $row.Type),(Encode $row.Credential),(Encode $row.KeyId),(Encode $row.Expiry),$row.Days,(Encode $row.Status)
     }
     $html = '<h2>Application credential expiry digest</h2><p>Generated {0} UTC. Weekly reminders continue while credentials remain in scope.</p><table border="1" cellpadding="6"><tr><th>Application / client ID</th><th>Credential / ID</th><th>Expiry (UTC)</th><th>Days left</th><th>Status</th></tr>{1}</table><p>Review each credential. If still needed, replace it and update the consuming workload. Validate the replacement before removing the old credential. A replacement credential does not prove the workload has been updated.</p>' -f $now.ToString('yyyy-MM-dd HH:mm'),($tableRows -join '')
-    $messages.Add([pscustomobject]@{ To=$recipient; Subject='Action needed: application credential expiry digest'; Html=$html })
+    $subject = if (@($digests[$recipient] | Where-Object Status -EQ 'Action required').Count) { 'Action required: application credential expiry digest' } else { 'Upcoming: application credential expiry digest' }
+    $messages.Add([pscustomobject]@{ To=$recipient; Subject=$subject; Html=$html })
 }
 if ($exceptions.Count) {
     $detail = $exceptions | ConvertTo-Json -Depth 8
@@ -132,7 +138,7 @@ if ($exceptions.Count) {
 $failures = 0
 foreach ($message in $messages) {
     $actualRecipient = if ($TestRecipient) { $TestRecipient } else { $message.To }
-    $html = if ($TestRecipient) { "<p>TEST — intended recipient: $(Encode $message.To)</p>$($message.Html)" } else { $message.Html }
+    $html = if ($TestRecipient) { "<p>TEST - intended recipient: $(Encode $message.To)</p>$($message.Html)" } else { $message.Html }
     if (!$sendEnabled) {
         [pscustomobject]@{ Mode='DryRun'; Recipient=$actualRecipient; IntendedRecipient=$message.To; Subject=$message.Subject; Html=$html } | ConvertTo-Json -Depth 5
         continue

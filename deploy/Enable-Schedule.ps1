@@ -7,7 +7,12 @@ Connect-DigestAzure $config
 $base=Get-DigestBase $config
 $name='Weekly-Owner-Digest'
 if ($Disable) {
-    Invoke-DigestArm -Uri "$base/schedules/$($name)?api-version=2024-10-23" -Method PATCH -Body @{properties=@{isEnabled=$false}} | Out-Null
+    try { Invoke-DigestArm -Uri "$base/schedules/$($name)?api-version=2024-10-23" -Method PATCH -Body @{properties=@{isEnabled=$false}} | Out-Null }
+    catch {
+        if ([int]$_.Exception.Response.StatusCode -ne 404) { throw }
+        Write-Host 'No weekly schedule exists; nothing to disable.'
+        return
+    }
     Write-Host 'Weekly schedule disabled.'
     return
 }

@@ -4,7 +4,7 @@ A small Azure Automation solution that emails app registration owners about expi
 
 It uses native Azure and Microsoft 365 services: Resource Manager/Bicep, Automation, managed identity, Graph, Exchange Online Application RBAC, and Azure Monitor. No database, website, stored password, or expiring authentication secret is required.
 
-## What we built
+## Notification rules
 
 | Credential status | Action |
 | --- | --- |
@@ -14,7 +14,7 @@ It uses native Azure and Microsoft 365 services: Resource Manager/Bicep, Automat
 | Already expired | IT exception digest |
 | Expiring with no emailable user owner | IT exception digest |
 
-Thresholds are configurable. All emailable user owners get their relevant digest. Owners with several affected apps get one combined email. Service principal owners cannot receive mail. Addresses come from Graph's user `mail` property; sign-in names are not assumed to be email addresses. Guests work when `mail` contains an address.
+Thresholds are configurable. All emailable user owners get their relevant digest. Owners with several affected apps get one combined email. The subject reads "Action required" when any row is within the urgent window, otherwise "Upcoming". Service principal owners cannot receive mail. Owners with sign-in blocked are still emailed when they have a `mail` value. This is deliberate: shared mailbox accounts normally have sign-in blocked, so a disabled account does not mean an unmonitored mailbox. Addresses come from Graph's user `mail` property; sign-in names are not assumed to be email addresses. Guests work when `mail` contains an address.
 
 Reminders repeat weekly while credentials remain in scope. There is no notification ledger. First detection can occur almost seven days after entering a warning window. These are recurring digests, not exactly-once reminders at day 60/30.
 
@@ -54,15 +54,22 @@ An expiring credential may already have a replacement. Adding one does not suppr
 | `deploy/Test-Deployment.ps1` | Dry run, redirected test, owner test, job inspection |
 | `deploy/Enable-Schedule.ps1` | Enable/update/disable weekly delivery |
 | `deploy/Common.ps1` | Shared configuration/API helpers |
-| `Test-CredentialDigest.ps1`, `deploy/Test-Package.ps1` | Offline checks |
+| `Test-CredentialDigest.ps1`, `deploy/Test-Package.ps1`, `deploy/Test-Schedule.ps1` | Offline checks |
 
-The ZIP excludes original tenant IDs, config, logs, previews, and development helpers. The original workspace retains `Dev-Test-Record.md` separately; it is not shipped.
+The repository contains no tenant IDs or configuration. Keep your `config.json` local; it is ignored by Git.
 
 ## Prerequisites and permissions
 
 Use PowerShell 7.4+, a current Azure CLI, and the Microsoft.Graph.Authentication and ExchangeOnlineManagement modules. Use a dedicated Automation account and preferably a dedicated resource group.
 
-The public-cloud Azure subscription, app registrations, and Exchange mailbox must be in the same Entra tenant. Sovereign-cloud endpoints are not configured. An active Exchange email-capable subscription is required. E5 is not required. A standard shared mailbox up to 50 GB without advanced features normally needs no separate license; people accessing it need their own appropriate Exchange license. The automation identity needs no mailbox license. An existing user mailbox must be licensed appropriately.
+The Azure subscription, app registrations, and Exchange mailbox must be in the same Entra tenant, in the public cloud; sovereign-cloud endpoints are not configured.
+
+Licensing:
+
+- The tenant needs an active subscription that includes Exchange Online. E5 is not required.
+- A standard shared mailbox up to 50 GB without advanced features normally needs no license of its own. People who open it need their own Exchange license.
+- An existing user mailbox used as the sender must be licensed.
+- The automation identity needs no mailbox license.
 
 The subscription's `Microsoft.Automation` and `Microsoft.Insights` resource providers must be registered. A subscription administrator can register them if deployment reports MissingSubscriptionRegistration. A resource-group Contributor may not have subscription-wide provider-registration rights.
 
@@ -77,7 +84,7 @@ Azure Automation and metric alerts may incur charges. Check current pricing/lice
 
 Azure CLI needs an explicit target-tenant sign-in. Graph and Exchange use separate interactive setup sign-ins. **Normal interactive sign-in is the default**: run Deploy without `-DeviceLogin` for the Microsoft browser/broker sign-in supported by your installed modules. MFA and Conditional Access still apply. Device code is an explicit optional mode; omit it in tenants that block that flow. Setup credentials are not stored in the package or used by scheduled jobs.
 
-The weekly runbook uses Azure managed identity, not a user sign-in or device code. Disabling device code authentication for users does not make this automation depend on an interactive login.
+The weekly runbook authenticates with the Automation account's managed identity. It never uses device code or a user sign-in, so blocking device code flow in Conditional Access does not affect it.
 
 The Graph setup session requests delegated `Application.Read.All` and `AppRoleAssignment.ReadWrite.All` to grant roles. Those are deployment-session permissions. The managed identity receives only:
 
@@ -154,7 +161,7 @@ For separate administrators or to retry a stage:
 ./deploy/Deploy.ps1 -ConfigPath ./config.json -Stage Mailbox
 ```
 
-Each admin needs their stage's rights; Directory/Mailbox also read the Azure identity. Use a fresh PowerShell session when switching tenants. Exchange setup verifies the connected tenant before changes.
+Each admin needs their stage's rights; Directory/Mailbox also read the Azure identity and stop if the Azure stage has not created it yet. The Mailbox stage fails if Exchange does not yet report `Application Mail.Send` in scope for the sender; RBAC changes can take time to apply, so rerun it later. Use a fresh PowerShell session when switching tenants. Exchange setup verifies the connected tenant before changes.
 
 Existing grants/mailboxes/service principals are reused. Conflicting role assignments stop setup for review. Fix a failed stage and rerun it. Avoid deleting/recreating the Automation account: its identity changes and needs new grants.
 
@@ -227,7 +234,7 @@ The script manages `Weekly-Owner-Digest` and its fixed binding only. It does not
 - For thresholds, recipients or time: test changes and rerun Enable-Schedule. Parameters are stored in Azure, not read from your local config.
 - Incremental deployment with `enableFailureAlert=false` skips creation but does not delete previously deployed alerts; disable those in Azure Monitor if needed.
 - Maintain modules/runtime. The template pins a known working Az bundle; test upgrades. After editing Bicep, rebuild JSON with `az bicep build --file ./deploy/main.bicep`.
-- This package targets fresh deployments. Before managing the original dev installation with it, disable the older development schedule, which has a different name/binding.
+- If an older or manually created schedule already runs this runbook, disable it before running Enable-Schedule; the script only manages `Weekly-Owner-Digest`.
 
 ## Troubleshooting
 
@@ -236,7 +243,7 @@ The script manages `Weekly-Owner-Digest` and its fixed binding only. It does not
 | Wrong tenant | Sign into configured tenant/subscription; fresh PowerShell session |
 | Graph grant denied | Activate required Entra role and consent to setup scopes |
 | New identity not found | Replication can lag; setup retries briefly, then rerun Directory stage |
-| Exchange says unlicensed after purchase | Verify email-capable subscription/provisioning; retry fresh/device login. Our cached session returned this error after portal creation succeeded |
+| Exchange says unlicensed after purchase | Verify the Exchange subscription has provisioned; retry in a fresh PowerShell session. A cached Exchange session can report this after the license is active |
 | Sender not found | Check primary address, tenant, provisioning; create only if intended |
 | Send 403 | Check read grants, Exchange identity and scoped Mail.Send role; allow propagation time |
 | No owner email | Check Owners and user `mail`; service principals cannot receive mail |
@@ -247,11 +254,9 @@ The script manages `Weekly-Owner-Digest` and its fixed binding only. It does not
 
 ### Validation
 
-The dev tenant passed a managed-identity dry run across 48 apps. Two affected apps produced one combined digest. Direct internal owner delivery passed, confirmed by message trace without an override. External owner lookup worked, but external delivery failed with 550 5.7.708 for two destinations.
+Tested live in a development tenant: a fresh resource group and Automation account, an existing shared mailbox, a tenant-wide managed-identity dry run, combined owner digests confirmed by message trace, and schedule creation, repeat activation, and disabling. External delivery from that tenant was blocked with 550 5.7.708 (sending-IP reputation), which is an Exchange policy outcome rather than a code path. This was not a separate-tenant test; complete acceptance checks in each target tenant.
 
-The portable package was also deployed into a fresh resource group and Automation account in the dev tenant using an existing shared mailbox. Its new managed identity completed a tenant-wide dry run and sent one owner digest for the two affected credentials; Exchange message trace confirmed delivery. Schedule creation, repeated activation without a duplicate binding, and disabling were tested against Azure. The test schedule was left disabled so it would not duplicate the original deployment. This is a fresh-install test in the same tenant, not a separate-tenant test; complete acceptance checks in each target tenant.
-
-That live package test found and corrected three setup issues: suppressed Graph device sign-in output, duplicate Exchange scopes when reusing a mailbox, and byte-array enumeration during runbook upload. Regression checks cover upload serialization and sender scope reuse. Offline checks also cover digest behavior, configuration, mailbox modes, and scheduling.
+Offline checks cover digest behavior (including culture-independent expiry parsing), configuration, mailbox modes, sender scope reuse, runbook upload serialization, and scheduling:
 
 ```powershell
 ./Test-CredentialDigest.ps1

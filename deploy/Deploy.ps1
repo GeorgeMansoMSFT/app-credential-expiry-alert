@@ -29,6 +29,7 @@ if ($Stage -in @('All','Azure')) {
 Write-Host 'Reading the Automation managed identity.'
 $account = Invoke-DigestArm -Uri "$($base)?api-version=2024-10-23"
 $principalId = $account.identity.principalId
+if (!$principalId) { throw 'The Automation account has no system-assigned identity yet. Run the Azure stage first.' }
 
 if ($Stage -in @('All','Directory')) {
     Write-Host 'Signing into Microsoft Graph for directory permission setup.'
@@ -40,9 +41,9 @@ if ($Stage -in @('All','Directory')) {
     try {
         if ((Get-MgContext).TenantId -ne $config.tenantId) { throw 'Graph signed into the wrong tenant.' }
         $graph = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals(appId='00000003-0000-0000-c000-000000000000')" -OutputType PSObject
-        $sp = $null
+        # Wait for the new managed identity to replicate into the directory before granting roles.
         for ($attempt=0; $attempt -lt 6; $attempt++) {
-            try { $sp=Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId" -OutputType PSObject; break }
+            try { Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId" -OutputType PSObject | Out-Null; break }
             catch { if ($attempt -eq 5) { throw }; Start-Sleep -Seconds 10 }
         }
         $assignments = Invoke-MgGraphRequest -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$principalId/appRoleAssignments" -OutputType PSObject
@@ -87,7 +88,11 @@ if ($Stage -in @('All','Mailbox')) {
         elseif ([string]$assignment.CustomResourceScope -ne $scopeName) {
             Set-ManagementRoleAssignment -Identity $assignmentName -CustomResourceScope $scopeName | Out-Null
         }
-        Test-ServicePrincipalAuthorization -Identity $principalId -Resource $config.senderMailbox | Format-Table
+        $authorization = @(Test-ServicePrincipalAuthorization -Identity $principalId -Resource $config.senderMailbox)
+        $authorization | Format-Table | Out-Host
+        if (!(Test-DigestMailSendInScope $authorization)) {
+            throw 'Application Mail.Send is not in scope for the sender mailbox yet. Exchange RBAC can take time to apply; rerun the Mailbox stage to recheck.'
+        }
     } finally { Disconnect-ExchangeOnline -Confirm:$false }
 }
 Write-Host 'Setup complete. No new schedule was activated. Run Test-Deployment.ps1 before Enable-Schedule.ps1.'
