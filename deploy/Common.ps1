@@ -73,6 +73,11 @@ function Resolve-DigestSender($Config) {
     if ([string]$mailbox.PrimarySmtpAddress -ne $Config.senderMailbox) { throw 'Set senderMailbox to the mailbox primary SMTP address, then rerun.' }
     return $mailbox
 }
+function Test-DigestMailSendInScope($Authorization) {
+    # Exchange may return InScope as the string "True"/"False"; any nonempty string is truthy,
+    # so compare its text. [string]$true is also "True", so a real boolean passes the same test.
+    [bool]@($Authorization | Where-Object { [string]$_.RoleName -eq 'Application Mail.Send' -and [string]$_.InScope -eq 'True' }).Count
+}
 function Resolve-DigestSendScope($Config) {
     $filter="PrimarySmtpAddress -eq '$($Config.senderMailbox.Replace("'","''"))'"
     $scope=Get-ManagementScope | Where-Object {

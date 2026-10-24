@@ -90,7 +90,7 @@ if ($Stage -in @('All','Mailbox')) {
         }
         $authorization = @(Test-ServicePrincipalAuthorization -Identity $principalId -Resource $config.senderMailbox)
         $authorization | Format-Table | Out-Host
-        if (!@($authorization | Where-Object { $_.RoleName -eq 'Application Mail.Send' -and $_.InScope }).Count) {
+        if (!(Test-DigestMailSendInScope $authorization)) {
             throw 'Application Mail.Send is not in scope for the sender mailbox yet. Exchange RBAC can take time to apply; rerun the Mailbox stage to recheck.'
         }
     } finally { Disconnect-ExchangeOnline -Confirm:$false }
