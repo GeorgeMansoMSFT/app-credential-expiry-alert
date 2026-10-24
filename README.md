@@ -14,7 +14,7 @@ It uses native Azure and Microsoft 365 services: Resource Manager/Bicep, Automat
 | Already expired | IT exception digest |
 | Expiring with no emailable user owner | IT exception digest |
 
-Thresholds are configurable. All emailable user owners get their relevant digest. Owners with several affected apps get one combined email. The subject reads "Action required" when any row is within the urgent window, otherwise "Upcoming". Service principal owners cannot receive mail. Disabled user accounts are not detected: an owner whose account is disabled but still has a `mail` value is treated as emailable. Addresses come from Graph's user `mail` property; sign-in names are not assumed to be email addresses. Guests work when `mail` contains an address.
+Thresholds are configurable. All emailable user owners get their relevant digest. Owners with several affected apps get one combined email. The subject reads "Action required" when any row is within the urgent window, otherwise "Upcoming". Service principal owners cannot receive mail. Owners with sign-in blocked are still emailed when they have a `mail` value. This is deliberate: shared mailbox accounts normally have sign-in blocked, so a disabled account does not mean an unmonitored mailbox. Addresses come from Graph's user `mail` property; sign-in names are not assumed to be email addresses. Guests work when `mail` contains an address.
 
 Reminders repeat weekly while credentials remain in scope. There is no notification ledger. First detection can occur almost seven days after entering a warning window. These are recurring digests, not exactly-once reminders at day 60/30.
 
