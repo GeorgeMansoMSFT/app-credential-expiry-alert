@@ -41,14 +41,14 @@ function Invoke-DigestArm {
     param([string]$Uri, [string]$Method='GET', $Body, [string]$ContentType='application/json')
     if (!$Uri.StartsWith('https://management.azure.com/')) { throw 'Unexpected Azure management URL.' }
     $token = Invoke-AzureCli @('account','get-access-token','--resource','https://management.azure.com/')
-    $args = @{Uri=$Uri;Method=$Method;Authentication='Bearer';Token=(ConvertTo-SecureString $token.accessToken -AsPlainText -Force);ErrorAction='Stop'}
+    $request = @{Uri=$Uri;Method=$Method;Authentication='Bearer';Token=(ConvertTo-SecureString $token.accessToken -AsPlainText -Force);ErrorAction='Stop'}
     if ($null -ne $Body) {
-        $args.ContentType = $ContentType
+        $request.ContentType = $ContentType
         # Assign directly: an if-expression would enumerate byte[] into object[].
-        if ($Body -is [byte[]]) { $args.Body = $Body }
-        else { $args.Body = $Body | ConvertTo-Json -Depth 20 }
+        if ($Body -is [byte[]]) { $request.Body = $Body }
+        else { $request.Body = $Body | ConvertTo-Json -Depth 20 }
     }
-    Invoke-RestMethod @args
+    Invoke-RestMethod @request
 }
 function Get-DigestBase($Config) {
     "https://management.azure.com/subscriptions/$($Config.subscriptionId)/resourceGroups/$($Config.resourceGroup)/providers/Microsoft.Automation/automationAccounts/$($Config.automationAccountName)"

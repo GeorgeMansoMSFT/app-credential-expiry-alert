@@ -33,7 +33,14 @@ function global:Invoke-RestMethod {
     if ($Uri -match '/schedules/') {
         switch ($Method) {
             PUT { $state.Schedule=$Body | ConvertFrom-Json; return }
-            PATCH { $state.Enabled=($Body | ConvertFrom-Json).properties.isEnabled; return }
+            PATCH {
+                if ($null -eq $state.Schedule) {
+                    $failure=[Exception]::new('Not found')
+                    $failure | Add-Member -NotePropertyName Response -NotePropertyValue @{StatusCode=404}
+                    throw $failure
+                }
+                $state.Enabled=($Body | ConvertFrom-Json).properties.isEnabled; return
+            }
             GET { return @{properties=@{isEnabled=$state.Enabled;nextRun=$state.Schedule.properties.startTime;timeZone=$state.Schedule.properties.timeZone;frequency='Week'}} }
         }
     }
@@ -43,6 +50,8 @@ function Assert($Condition,[string]$Message) { if (!$Condition) { throw $Message
 $path=[IO.Path]::GetTempFileName()
 try {
     $global:digestScheduleConfig | ConvertTo-Json | Set-Content -LiteralPath $path
+    & "$PSScriptRoot/Enable-Schedule.ps1" -ConfigPath $path -Disable 6>$null | Out-Null
+    Assert ($null -eq $global:digestScheduleState.Schedule) 'Disable before activation created a schedule.'
     & "$PSScriptRoot/Enable-Schedule.ps1" -ConfigPath $path | Out-Null
     Assert ($global:digestScheduleState.Creates -eq 1) 'First run did not create exactly one binding.'
     Assert ($global:digestScheduleState.Link.properties.parameters.SendEmail -eq 'true') 'Schedule did not enable sending.'
@@ -56,7 +65,7 @@ try {
     Assert ($global:digestScheduleState.Link.properties.parameters.FallbackRecipient -eq 'updated@contoso.com') 'Updated fallback not stored.'
     & "$PSScriptRoot/Enable-Schedule.ps1" -ConfigPath $path -Disable | Out-Null
     Assert (!$global:digestScheduleState.Enabled) 'Disable did not stop the schedule.'
-    'PASS: first activation, owner routing, repeat activation, parameter update, and disable.'
+    'PASS: disable before activation, first activation, owner routing, repeat activation, parameter update, and disable.'
 } finally {
     Remove-Item -LiteralPath $path -Force
     Remove-Item Function:\az,Function:\Invoke-RestMethod

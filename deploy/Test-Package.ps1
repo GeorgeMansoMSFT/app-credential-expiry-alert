@@ -41,7 +41,7 @@ try {
     Assert ($global:digestMailboxCreated -eq 1) 'Create mode must create once and reuse on repeat.'
     $global:digestMailboxAddress='different@contoso.com'
     $caught=$false; try { Resolve-DigestSender $valid | Out-Null } catch { $caught=$true }
-    Assert $caught 'Mailbox alias mismatch must not silently mis-scope send permissions.'
+    Assert $caught 'Primary SMTP mismatch must not silently mis-scope send permissions.'
     $global:digestScopeCreated=0
     $global:digestScopes=@([pscustomobject]@{Name='ExistingScope';RecipientFilter="PrimarySmtpAddress -eq '$($valid.senderMailbox)'";RecipientRoot=$null;ServerFilter='';Exclusive=$false;ScopeRestrictionType='RecipientScope'})
     function Get-ManagementScope { $global:digestScopes }
